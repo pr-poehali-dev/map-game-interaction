@@ -4,35 +4,35 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    --background: 250 35% 7%;
+    --foreground: 160 30% 92%;
 
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card: 252 32% 11%;
+    --card-foreground: 160 30% 92%;
 
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
+    --popover: 252 32% 11%;
+    --popover-foreground: 160 30% 92%;
 
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
+    --primary: 150 90% 55%;
+    --primary-foreground: 250 40% 6%;
 
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 280 70% 60%;
+    --secondary-foreground: 0 0% 100%;
 
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
+    --muted: 250 25% 18%;
+    --muted-foreground: 250 12% 62%;
 
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    --accent: 45 95% 58%;
+    --accent-foreground: 250 40% 6%;
 
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive: 0 80% 60%;
+    --destructive-foreground: 0 0% 100%;
 
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
+    --border: 250 25% 22%;
+    --input: 250 25% 22%;
+    --ring: 150 90% 55%;
 
-    --radius: 0.5rem;
+    --radius: 0px;
 
     --sidebar-background: 0 0% 98%;
 
@@ -96,6 +96,51 @@
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground font-body;
+    image-rendering: pixelated;
+  }
+}
+
+@layer utilities {
+  .pixelated {
+    image-rendering: pixelated;
+  }
+
+  .pixel-box {
+    box-shadow:
+      0 0 0 3px hsl(var(--background)),
+      0 0 0 6px currentColor;
+  }
+
+  .pixel-shadow {
+    box-shadow: 5px 5px 0 0 rgba(0, 0, 0, 0.55);
+  }
+
+  .neon-glow {
+    text-shadow:
+      0 0 8px hsl(var(--primary) / 0.8),
+      0 0 22px hsl(var(--primary) / 0.45);
+  }
+
+  .grid-floor {
+    background-image:
+      linear-gradient(to right, hsl(var(--border) / 0.5) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--border) / 0.5) 1px, transparent 1px);
+    background-size: 48px 48px;
+  }
+
+  .crt::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 9999;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(0, 0, 0, 0) 0px,
+      rgba(0, 0, 0, 0) 2px,
+      rgba(0, 0, 0, 0.18) 3px,
+      rgba(0, 0, 0, 0) 4px
+    );
   }
 }

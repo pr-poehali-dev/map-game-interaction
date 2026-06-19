@@ -7,6 +7,7 @@ export default {
 		"./components/**/*.{ts,tsx}",
 		"./app/**/*.{ts,tsx}",
 		"./src/**/*.{ts,tsx}",
+			"./1781867469184914108.html"
 	],
 	prefix: "",
 	theme: {
@@ -18,6 +19,11 @@ export default {
 			}
 		},
 		extend: {
+			fontFamily: {
+				pixel: ['"Press Start 2P"', 'monospace'],
+				mono: ['VT323', 'monospace'],
+				body: ['Rubik', 'sans-serif'],
+			},
 			colors: {
 				border: 'hsl(var(--border))',
 				input: 'hsl(var(--input))',
@@ -70,25 +76,42 @@ export default {
 			},
 			keyframes: {
 				'accordion-down': {
-					from: {
-						height: '0'
-					},
-					to: {
-						height: 'var(--radix-accordion-content-height)'
-					}
+					from: { height: '0' },
+					to: { height: 'var(--radix-accordion-content-height)' }
 				},
 				'accordion-up': {
-					from: {
-						height: 'var(--radix-accordion-content-height)'
-					},
-					to: {
-						height: '0'
-					}
+					from: { height: 'var(--radix-accordion-content-height)' },
+					to: { height: '0' }
+				},
+				'fade-in': {
+					from: { opacity: '0', transform: 'translateY(10px)' },
+					to: { opacity: '1', transform: 'translateY(0)' }
+				},
+				'scale-in': {
+					from: { opacity: '0', transform: 'scale(0.9)' },
+					to: { opacity: '1', transform: 'scale(1)' }
+				},
+				'float-bob': {
+					'0%,100%': { transform: 'translateY(0)' },
+					'50%': { transform: 'translateY(-6px)' }
+				},
+				'flicker': {
+					'0%,100%': { opacity: '1' },
+					'50%': { opacity: '0.82' }
+				},
+				'scan': {
+					from: { transform: 'translateY(-100%)' },
+					to: { transform: 'translateY(100%)' }
 				}
 			},
 			animation: {
 				'accordion-down': 'accordion-down 0.2s ease-out',
-				'accordion-up': 'accordion-up 0.2s ease-out'
+				'accordion-up': 'accordion-up 0.2s ease-out',
+				'fade-in': 'fade-in 0.4s ease-out',
+				'scale-in': 'scale-in 0.3s ease-out',
+				'float-bob': 'float-bob 2.5s ease-in-out infinite',
+				'flicker': 'flicker 3s ease-in-out infinite',
+				'scan': 'scan 6s linear infinite'
 			}
 		}
 	},
