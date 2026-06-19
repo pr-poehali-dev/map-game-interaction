@@ -1,29 +1,32 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import Icon from '@/components/ui/icon';
 import PixelSprite from './PixelSprite';
-import { CHARACTERS, ITEMS, SpriteData, GameItem } from './sprites';
+import { CHARACTERS, SpriteData, GameItem } from './sprites';
 import { isFrame, sectorOf, hash2 } from './world';
 import { Clan } from './ClansScreen';
+import { apiSync, apiDrop, apiPick, apiEditItem, apiSolid, apiChat, apiPrivatize, apiExtend } from './api';
 
-interface FloorItem extends GameItem {
+interface FloorItem {
+  id: number;
   x: number;
   y: number;
+  sprite: SpriteData;
+  creator: string;
+  editors: string[];
+  solid: boolean;
 }
 
 interface Player {
-  id: number;
   name: string;
   x: number;
   y: number;
   char: number;
-  me?: boolean;
 }
 
 interface ChatMsg {
   id: number;
   name: string;
   text: string;
-  color: string;
 }
 
 export interface Privat {
@@ -40,58 +43,58 @@ const VIEW_W = 13;
 const VIEW_H = 9;
 const DAY = 86400000;
 
-const seedItem = (sprite: SpriteData, creator: string, editors: string[] = []): GameItem => ({
-  id: Math.random(),
-  sprite,
-  creator,
-  editors,
-  solid: false,
-});
-
 const GameScreen = ({
-  username, charIndex, newItem, onConsumeNewItem, privats, setPrivats,
+  username, charIndex, startX, startY, newItem, onConsumeNewItem,
   myClan, onOpenEditor, onOpenLeaders, onOpenClans, onEditItem,
 }: {
   username: string;
   charIndex: number;
+  startX: number;
+  startY: number;
   newItem: GameItem | null;
   onConsumeNewItem: () => void;
-  privats: Privat[];
-  setPrivats: React.Dispatch<React.SetStateAction<Privat[]>>;
   myClan: Clan | null;
   onOpenEditor: () => void;
   onOpenLeaders: () => void;
   onOpenClans: () => void;
   onEditItem: (item: GameItem, apply: (s: SpriteData) => void) => void;
 }) => {
-  const [pos, setPos] = useState({ x: 5, y: 5 });
-  const [others] = useState<Player[]>([
-    { id: 2, name: 'NEO_42', x: 3, y: 4, char: 1 },
-    { id: 3, name: 'pixelKa', x: 8, y: 7, char: 2 },
-  ]);
+  const [pos, setPos] = useState({ x: startX, y: startY });
+  const [others, setOthers] = useState<Player[]>([]);
+  const [floor, setFloor] = useState<FloorItem[]>([]);
+  const [privats, setPrivats] = useState<Privat[]>([]);
+  const [messages, setMessages] = useState<ChatMsg[]>([]);
 
-  const [floor, setFloor] = useState<FloorItem[]>([
-    { ...seedItem(ITEMS[0], 'NEO_42', ['gh0st']), x: 4, y: 5 },
-    { ...seedItem(ITEMS[1], 'pixelKa'), x: 8, y: 6 },
-    { ...seedItem(ITEMS[2], 'retr0', ['pixelKa', 'NEO_42']), x: 6, y: 8 },
-  ]);
-
-  // инвентарь 10 слотов
-  const [inv, setInv] = useState<(GameItem | null)[]>(() => {
-    const a: (GameItem | null)[] = Array(10).fill(null);
-    return a;
-  });
+  const [inv, setInv] = useState<(GameItem | null)[]>(() => Array(10).fill(null));
   const [slot, setSlot] = useState(0);
-
-  const [messages, setMessages] = useState<ChatMsg[]>([
-    { id: 1, name: 'NEO_42', text: 'кто приватил сектор у спавна?', color: 'text-secondary' },
-    { id: 2, name: 'pixelKa', text: 'го клан, приватим больше секторов', color: 'text-primary' },
-  ]);
   const [chatInput, setChatInput] = useState('');
-  const chatRef = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<FloorItem | null>(null);
+  const chatRef = useRef<HTMLDivElement>(null);
 
-  // новый созданный предмет кладём в текущий слот (или первый свободный)
+  const posRef = useRef(pos);
+  posRef.current = pos;
+
+  // периодическая синхронизация мира
+  const doSync = useCallback(async () => {
+    try {
+      const p = posRef.current;
+      const data = await apiSync(p.x, p.y);
+      setOthers(data.players || []);
+      setFloor(data.items || []);
+      setPrivats(data.privats || []);
+      setMessages((data.chat || []).map((m: ChatMsg) => ({ id: m.id, name: m.name, text: m.text })));
+    } catch {
+      /* тихо игнорируем сетевые сбои */
+    }
+  }, []);
+
+  useEffect(() => {
+    doSync();
+    const t = setInterval(doSync, 1500);
+    return () => clearInterval(t);
+  }, [doSync]);
+
+  // новый созданный предмет в свободный слот
   useEffect(() => {
     if (!newItem) return;
     setInv((prev) => {
@@ -100,9 +103,7 @@ const GameScreen = ({
         const free = n.findIndex((x) => !x);
         if (free >= 0) { n[free] = newItem; setSlot(free); }
         else n[slot] = newItem;
-      } else {
-        n[slot] = newItem;
-      }
+      } else n[slot] = newItem;
       return n;
     });
     onConsumeNewItem();
@@ -113,17 +114,51 @@ const GameScreen = ({
     chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages]);
 
-  const setSlotItem = (i: GameItem | null) => {
+  const setSlotItem = (i: GameItem | null) =>
     setInv((prev) => { const n = [...prev]; n[slot] = i; return n; });
+
+  const curSector = sectorOf(pos.x, pos.y);
+  const curPrivat = useMemo(() => {
+    if (!curSector) return null;
+    return privats.find((p) => p.col === curSector.col && p.row === curSector.row && p.until > Date.now()) || null;
+  }, [curSector, privats]);
+
+  const canBuildHere = () => {
+    if (isFrame(pos.x, pos.y)) return false;
+    if (curPrivat) {
+      if (myClan && myClan.tag === curPrivat.clanTag) return true;
+      return curPrivat.owner === username && !curPrivat.clanTag;
+    }
+    return true;
   };
 
   const move = (dx: number, dy: number) =>
     setPos((p) => {
       const nx = p.x + dx;
       const ny = p.y + dy;
-      const blocked = floor.some((f) => f.x === nx && f.y === ny && f.solid);
-      return blocked ? p : { x: nx, y: ny };
+      if (floor.some((f) => f.x === nx && f.y === ny && f.solid)) return p;
+      return { x: nx, y: ny };
     });
+
+  const pickOrDrop = async () => {
+    const hereItem = floor.find((f) => f.x === pos.x && f.y === pos.y);
+    const cur = inv[slot];
+    if (cur) {
+      if (!canBuildHere() || hereItem) return;
+      setSlotItem(null);
+      try {
+        await apiDrop({ x: pos.x, y: pos.y, sprite: cur.sprite, creator: cur.creator, editors: cur.editors, solid: cur.solid });
+        doSync();
+      } catch { setSlotItem(cur); }
+    } else if (hereItem) {
+      if (curPrivat && !(myClan && myClan.tag === curPrivat.clanTag) && curPrivat.owner !== username) return;
+      try {
+        await apiPick(hereItem.id);
+        setSlotItem({ id: hereItem.id, sprite: hereItem.sprite, creator: hereItem.creator, editors: hereItem.editors, solid: hereItem.solid });
+        doSync();
+      } catch { /* занято кем-то ещё */ }
+    }
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -132,7 +167,7 @@ const GameScreen = ({
       else if (['arrowdown', 's', 'ы'].includes(k)) { e.preventDefault(); move(0, 1); }
       else if (['arrowleft', 'a', 'ф'].includes(k)) { e.preventDefault(); move(-1, 0); }
       else if (['arrowright', 'd', 'в'].includes(k)) { e.preventDefault(); move(1, 0); }
-      else if (/^[0-9]$/.test(k)) { setSlot(k === '0' ? 9 : parseInt(k) - 1); }
+      else if (/^[0-9]$/.test(k)) setSlot(k === '0' ? 9 : parseInt(k) - 1);
       else if (k === 'e' || k === 'у') { e.preventDefault(); pickOrDrop(); }
     };
     window.addEventListener('keydown', onKey);
@@ -140,93 +175,36 @@ const GameScreen = ({
     /* eslint-disable-next-line */
   }, [pos, inv, slot, privats, floor]);
 
-  // активный приват клетки игрока
-  const curSector = sectorOf(pos.x, pos.y);
-  const curPrivat = useMemo(() => {
-    if (!curSector) return null;
-    return privats.find((p) => p.col === curSector.col && p.row === curSector.row && p.until > Date.now()) || null;
-  }, [curSector, privats]);
-
-  const canBuildHere = () => {
-    if (isFrame(pos.x, pos.y)) return false; // в рамке нельзя ставить
-    if (curPrivat) {
-      // в привате строит только владелец/соклановец
-      if (myClan && myClan.tag === curPrivat.clanTag) return true;
-      return curPrivat.owner === username && !curPrivat.clanTag;
-    }
-    return true;
+  const toggleSolid = async (item: FloorItem) => {
+    try { await apiSolid(item.id, !item.solid); doSync(); } catch { /* */ }
   };
-
-  const pickOrDrop = () => {
-    const hereItem = floor.find((f) => f.x === pos.x && f.y === pos.y);
-    const cur = inv[slot];
-    if (cur) {
-      if (!canBuildHere()) return;
-      if (hereItem) return; // клетка занята
-      setFloor((prev) => [...prev, { ...cur, x: pos.x, y: pos.y }]);
-      setSlotItem(null);
-    } else if (hereItem) {
-      // нельзя забрать чужое из привата
-      if (curPrivat && !(myClan && myClan.tag === curPrivat.clanTag) && curPrivat.owner !== username) return;
-      setSlotItem({ id: hereItem.id, sprite: hereItem.sprite, creator: hereItem.creator, editors: hereItem.editors, solid: hereItem.solid });
-      setFloor((prev) => prev.filter((f) => f.id !== hereItem.id));
-    }
-  };
-
-  const toggleSolid = (id: number) =>
-    setFloor((prev) => prev.map((f) => (f.id === id ? { ...f, solid: !f.solid } : f)));
 
   const editFloorItem = (item: FloorItem) => {
     onEditItem(
       { id: item.id, sprite: item.sprite, creator: item.creator, editors: item.editors, solid: item.solid },
-      (s) =>
-        setFloor((prev) =>
-          prev.map((f) =>
-            f.id === item.id
-              ? { ...f, sprite: s, editors: f.editors.includes(username) || f.creator === username ? f.editors : [...f.editors, username] }
-              : f,
-          ),
-        ),
+      async (s) => { try { await apiEditItem(item.id, s); doSync(); } catch { /* */ } },
     );
   };
 
-  const privatizeCurrent = () => {
+  const privatizeCurrent = async () => {
     if (!curSector || curPrivat) return;
-    const until = Date.now() + 3 * DAY;
-    setPrivats((prev) => [
-      ...prev,
-      {
-        col: curSector.col,
-        row: curSector.row,
-        owner: username,
-        clanTag: myClan?.tag || '',
-        clanName: myClan?.name || '',
-        color: myClan?.color || '#2bdc87',
-        until,
-      },
-    ]);
+    try { await apiPrivatize(curSector.col, curSector.row); doSync(); } catch { /* */ }
   };
 
-  const extendCurrent = () => {
+  const extendCurrent = async () => {
     if (!curPrivat) return;
-    const canExtend = curPrivat.owner === username || (myClan && myClan.tag === curPrivat.clanTag);
-    if (!canExtend) return;
-    setPrivats((prev) =>
-      prev.map((p) =>
-        p.col === curPrivat.col && p.row === curPrivat.row ? { ...p, until: Date.now() + 3 * DAY } : p,
-      ),
-    );
+    try { await apiExtend(curPrivat.col, curPrivat.row); doSync(); } catch { /* */ }
   };
 
-  const sendMsg = () => {
-    if (!chatInput.trim()) return;
-    setMessages((prev) => [...prev, { id: Date.now(), name: username, text: chatInput.trim(), color: 'text-foreground' }]);
+  const sendMsg = async () => {
+    const text = chatInput.trim();
+    if (!text) return;
     setChatInput('');
+    setMessages((prev) => [...prev, { id: Date.now(), name: username, text }]);
+    try { await apiChat(text); doSync(); } catch { /* */ }
   };
 
   const cell = 'min(7vw, 54px)';
-
-  // окно мира вокруг игрока (камера)
   const ox = pos.x - Math.floor(VIEW_W / 2);
   const oy = pos.y - Math.floor(VIEW_H / 2);
 
@@ -249,19 +227,18 @@ const GameScreen = ({
 
   return (
     <div className="grid lg:grid-cols-[1fr_320px] gap-4 max-w-[1200px] mx-auto w-full">
-      {/* ИГРОВАЯ ЗОНА */}
       <div className="flex flex-col gap-3 animate-fade-in">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <h2 className="font-pixel text-primary text-xs neon-glow flex items-center gap-2">
             <Icon name="Compass" size={16} /> X:{pos.x} Y:{pos.y}
           </h2>
           <div className="flex items-center gap-2 font-mono text-lg text-muted-foreground">
-            <Icon name="Map" size={18} className="text-primary" />
-            {curSector ? `сектор ${curSector.col}:${curSector.row}` : 'проход (рамка)'}
+            <Icon name="Users" size={16} className="text-primary" /> {others.length + 1} онлайн ·
+            <Icon name="Map" size={16} className="text-primary" />
+            {curSector ? `сектор ${curSector.col}:${curSector.row}` : 'рамка'}
           </div>
         </div>
 
-        {/* баннер привата */}
         {curPrivat && (
           <div
             className="font-pixel text-[10px] px-3 py-2 border-2 animate-fade-in flex items-center gap-2"
@@ -272,13 +249,11 @@ const GameScreen = ({
           </div>
         )}
 
-        {/* КАРТА */}
         <div
           className="relative bg-card border-2 border-border pixel-shadow overflow-hidden mx-auto"
           style={{ width: `calc(${cell} * ${VIEW_W})`, height: `calc(${cell} * ${VIEW_H})` }}
           onMouseLeave={() => setHover(null)}
         >
-          {/* плитки мира */}
           {tiles.map((t) => {
             const pr = !t.frame ? privatAt(t.wx, t.wy) : null;
             const decor = !t.frame && hash2(t.wx, t.wy) > 0.88;
@@ -293,9 +268,7 @@ const GameScreen = ({
                   height: cell,
                   background: t.frame
                     ? 'repeating-linear-gradient(45deg, hsl(var(--muted)) 0 6px, hsl(var(--background)) 6px 12px)'
-                    : pr
-                    ? `${pr.color}14`
-                    : 'transparent',
+                    : pr ? `${pr.color}14` : 'transparent',
                   boxShadow: pr ? `inset 0 0 0 1px ${pr.color}55` : 'inset 0 0 0 1px hsl(var(--border) / 0.25)',
                 }}
               >
@@ -304,7 +277,6 @@ const GameScreen = ({
             );
           })}
 
-          {/* предметы на полу */}
           {floor.map((f) => {
             const vx = f.x - ox;
             const vy = f.y - oy;
@@ -321,32 +293,28 @@ const GameScreen = ({
             );
           })}
 
-          {/* другие игроки (мировые координаты) */}
           {others.map((p) => {
             const vx = p.x - ox;
             const vy = p.y - oy;
             if (vx < 0 || vy < 0 || vx >= VIEW_W || vy >= VIEW_H) return null;
             return (
               <div
-                key={p.id}
-                className="absolute flex flex-col items-center justify-center"
+                key={p.name}
+                className="absolute flex flex-col items-center justify-center transition-all duration-300"
                 style={{ left: `calc(${cell} * ${vx})`, top: `calc(${cell} * ${vy})`, width: cell, height: cell, zIndex: 10 }}
               >
                 <span className="absolute -top-1 font-mono text-[11px] leading-none text-muted-foreground whitespace-nowrap">{p.name}</span>
-                <PixelSprite grid={CHARACTERS[p.char].grid} palette={CHARACTERS[p.char].palette} size={4} />
+                <PixelSprite grid={CHARACTERS[p.char % CHARACTERS.length].grid} palette={CHARACTERS[p.char % CHARACTERS.length].palette} size={4} />
               </div>
             );
           })}
 
-          {/* мой персонаж (центр) */}
           <div
             className="absolute flex flex-col items-center justify-center"
             style={{
               left: `calc(${cell} * ${Math.floor(VIEW_W / 2)})`,
               top: `calc(${cell} * ${Math.floor(VIEW_H / 2)})`,
-              width: cell,
-              height: cell,
-              zIndex: 20,
+              width: cell, height: cell, zIndex: 20,
             }}
           >
             <span className="absolute -top-1 font-mono text-[11px] leading-none text-primary whitespace-nowrap">{username}</span>
@@ -355,7 +323,6 @@ const GameScreen = ({
             </div>
           </div>
 
-          {/* подсказка по предмету */}
           {hover && (
             <div className="absolute bottom-1 left-1 right-1 bg-background/95 border-2 border-primary p-2 z-30 animate-fade-in">
               <p className="font-mono text-base text-primary">Создатель: <span className="text-foreground">{hover.creator}</span></p>
@@ -368,7 +335,7 @@ const GameScreen = ({
               </p>
               {curPrivat && (myClan?.tag === curPrivat.clanTag || curPrivat.owner === username) && (
                 <div className="flex gap-2 mt-1">
-                  <button onClick={() => toggleSolid(hover.id)} className="font-mono text-sm border border-border px-2 py-0.5 hover:border-primary">
+                  <button onClick={() => toggleSolid(hover)} className="font-mono text-sm border border-border px-2 py-0.5 hover:border-primary">
                     {hover.solid ? 'сделать проходимым' : 'непроходимым'}
                   </button>
                   <button onClick={() => editFloorItem(hover)} className="font-mono text-sm border border-border px-2 py-0.5 hover:border-accent">
@@ -380,7 +347,6 @@ const GameScreen = ({
           )}
         </div>
 
-        {/* УПРАВЛЕНИЕ */}
         <div className="flex items-start justify-between flex-wrap gap-3 mt-1">
           <div className="grid grid-cols-3 gap-1 w-[132px] select-none">
             <span />
@@ -394,7 +360,6 @@ const GameScreen = ({
             <span />
           </div>
 
-          {/* приват сектора */}
           <div className="flex flex-col gap-2 flex-1 min-w-[160px]">
             {curSector ? (
               curPrivat ? (
@@ -422,7 +387,6 @@ const GameScreen = ({
           </div>
         </div>
 
-        {/* ИНВЕНТАРЬ 10 слотов */}
         <div className="flex gap-1.5 justify-center flex-wrap">
           {inv.map((it, i) => (
             <button
@@ -438,11 +402,10 @@ const GameScreen = ({
           ))}
         </div>
         <p className="font-mono text-base text-muted-foreground text-center">
-          WASD — ходить · 1–0 — слот · E — взять/положить · уходи далеко — мир бесконечен
+          WASD — ходить · 1–0 — слот · E — взять/положить · мир бесконечен и общий для всех
         </p>
       </div>
 
-      {/* БОКОВАЯ ПАНЕЛЬ */}
       <div className="flex flex-col gap-3 animate-fade-in" style={{ animationDelay: '0.1s' }}>
         <div className="grid grid-cols-3 gap-2">
           <SideBtn icon="Brush" label="СОЗДАТЬ" onClick={onOpenEditor} accent />
@@ -457,7 +420,6 @@ const GameScreen = ({
           </div>
         )}
 
-        {/* ЧАТ */}
         <div className="bg-card border-2 border-border flex flex-col flex-1 min-h-[260px] pixel-shadow">
           <div className="font-pixel text-[10px] text-secondary px-3 py-2 border-b-2 border-border flex items-center gap-2">
             <Icon name="MessagesSquare" size={14} /> ОБЩИЙ ЧАТ
@@ -465,10 +427,13 @@ const GameScreen = ({
           <div ref={chatRef} className="flex-1 overflow-y-auto px-3 py-2 space-y-2 max-h-[300px]">
             {messages.map((m) => (
               <div key={m.id} className="font-mono text-lg leading-tight animate-fade-in">
-                <span className={`${m.color} font-bold`}>{m.name}:</span>{' '}
+                <span className={`font-bold ${m.name === username ? 'text-primary' : 'text-secondary'}`}>{m.name}:</span>{' '}
                 <span className="text-foreground/90">{m.text}</span>
               </div>
             ))}
+            {messages.length === 0 && (
+              <p className="font-mono text-base text-muted-foreground text-center py-4">сообщений пока нет</p>
+            )}
           </div>
           <div className="flex border-t-2 border-border">
             <input

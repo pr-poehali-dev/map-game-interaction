@@ -2,13 +2,52 @@ import { useState } from 'react';
 import Icon from '@/components/ui/icon';
 import PixelSprite from './PixelSprite';
 import { CHARACTERS } from './sprites';
+import { apiRegister, apiLogin, setToken } from './api';
+import { Clan } from './ClansScreen';
 
-const AuthScreen = ({ onEnter }: { onEnter: (name: string, char: number) => void }) => {
+export interface Profile {
+  name: string;
+  char: number;
+  x: number;
+  y: number;
+  clan: Clan | null;
+}
+
+const AuthScreen = ({ onEnter }: { onEnter: (p: Profile) => void }) => {
   const [mode, setMode] = useState<'login' | 'register'>('register');
   const [name, setName] = useState('');
+  const [password, setPassword] = useState('');
   const [char, setChar] = useState(Math.floor(Math.random() * CHARACTERS.length));
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const enter = () => onEnter(name.trim() || 'Игрок_' + Math.floor(Math.random() * 999), char);
+  const enter = async () => {
+    if (loading) return;
+    setError('');
+    if (!name.trim() || !password.trim()) {
+      setError('Введите имя и пароль');
+      return;
+    }
+    setLoading(true);
+    try {
+      const data =
+        mode === 'register'
+          ? await apiRegister(name.trim(), password, char)
+          : await apiLogin(name.trim(), password);
+      setToken(data.token);
+      onEnter({
+        name: data.username,
+        char: data.char ?? char,
+        x: data.x ?? 5,
+        y: data.y ?? 5,
+        clan: data.clan || null,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Ошибка');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
@@ -19,9 +58,8 @@ const AuthScreen = ({ onEnter }: { onEnter: (name: string, char: number) => void
         </div>
 
         <div className="bg-card border-2 border-border pixel-shadow p-6 space-y-5">
-          {/* выбор персонажа */}
           <div>
-            <p className="font-mono text-base text-muted-foreground mb-2 text-center">ТВОЙ ПЕРСОНАЖ (СЛУЧАЙНЫЙ)</p>
+            <p className="font-mono text-base text-muted-foreground mb-2 text-center">ТВОЙ ПЕРСОНАЖ</p>
             <div className="flex justify-center gap-3">
               {CHARACTERS.map((c, i) => (
                 <button
@@ -50,20 +88,30 @@ const AuthScreen = ({ onEnter }: { onEnter: (name: string, char: number) => void
             <span className="px-3 text-muted-foreground"><Icon name="Lock" size={18} /></span>
             <input
               type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && enter()}
               placeholder="пароль"
               className="flex-1 bg-transparent py-3 font-mono text-xl outline-none placeholder:text-muted-foreground"
             />
           </div>
 
+          {error && (
+            <p className="font-mono text-lg text-destructive text-center animate-fade-in flex items-center justify-center gap-2">
+              <Icon name="TriangleAlert" size={16} /> {error}
+            </p>
+          )}
+
           <button
             onClick={enter}
-            className="w-full font-pixel text-[11px] bg-primary text-primary-foreground py-4 pixel-shadow active:translate-y-[2px] active:shadow-none transition-all"
+            disabled={loading}
+            className="w-full font-pixel text-[11px] bg-primary text-primary-foreground py-4 pixel-shadow active:translate-y-[2px] active:shadow-none transition-all disabled:opacity-60"
           >
-            {mode === 'register' ? 'НАЧАТЬ ИГРУ' : 'ВОЙТИ'}
+            {loading ? 'ЗАГРУЗКА...' : mode === 'register' ? 'НАЧАТЬ ИГРУ' : 'ВОЙТИ'}
           </button>
 
           <button
-            onClick={() => setMode((m) => (m === 'login' ? 'register' : 'login'))}
+            onClick={() => { setMode((m) => (m === 'login' ? 'register' : 'login')); setError(''); }}
             className="w-full font-mono text-lg text-muted-foreground hover:text-primary transition-colors"
           >
             {mode === 'register' ? 'уже есть аккаунт? войти' : 'нет аккаунта? регистрация'}

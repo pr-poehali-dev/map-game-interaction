@@ -1,23 +1,22 @@
 import { useState } from 'react';
 import Icon from '@/components/ui/icon';
-import AuthScreen from '@/components/game/AuthScreen';
-import GameScreen, { Privat } from '@/components/game/GameScreen';
+import AuthScreen, { Profile } from '@/components/game/AuthScreen';
+import GameScreen from '@/components/game/GameScreen';
 import PixelEditor from '@/components/game/PixelEditor';
 import Leaderboard from '@/components/game/Leaderboard';
 import ClansScreen, { Clan } from '@/components/game/ClansScreen';
 import { SpriteData, GameItem } from '@/components/game/sprites';
+import { clearToken } from '@/components/game/api';
 
 const Index = () => {
-  const [user, setUser] = useState<{ name: string; char: number } | null>(null);
+  const [user, setUser] = useState<Profile | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [leadersOpen, setLeadersOpen] = useState(false);
   const [clansOpen, setClansOpen] = useState(false);
 
   const [newItem, setNewItem] = useState<GameItem | null>(null);
-  const [privats, setPrivats] = useState<Privat[]>([]);
   const [myClan, setMyClan] = useState<Clan | null>(null);
 
-  // редактирование существующего предмета: callback применяет новый спрайт
   const [editTarget, setEditTarget] = useState<{ item: GameItem; apply: (s: SpriteData) => void } | null>(null);
 
   const openEditItem = (item: GameItem, apply: (s: SpriteData) => void) => {
@@ -30,16 +29,23 @@ const Index = () => {
       editTarget.apply(sprite);
       setEditTarget(null);
     } else if (user) {
-      // новый предмет передаём в игру (попадёт в инвентарь)
       setNewItem({ id: Date.now(), sprite, creator: user.name, editors: [], solid: false });
     }
     setEditorOpen(false);
   };
 
+  const logout = () => {
+    clearToken();
+    setUser(null);
+    setMyClan(null);
+  };
+
   if (!user) {
     return (
       <div className="crt min-h-screen">
-        <AuthScreen onEnter={(name, char) => setUser({ name, char })} />
+        <AuthScreen
+          onEnter={(p) => { setUser(p); setMyClan(p.clan); }}
+        />
       </div>
     );
   }
@@ -59,7 +65,7 @@ const Index = () => {
               <Icon name="User" size={16} className="text-primary" /> {user.name}
             </span>
             <button
-              onClick={() => setUser(null)}
+              onClick={logout}
               className="text-muted-foreground hover:text-destructive transition-colors"
               title="выйти"
             >
@@ -73,10 +79,10 @@ const Index = () => {
         <GameScreen
           username={user.name}
           charIndex={user.char}
+          startX={user.x}
+          startY={user.y}
           newItem={newItem}
           onConsumeNewItem={() => setNewItem(null)}
-          privats={privats}
-          setPrivats={setPrivats}
           myClan={myClan}
           onOpenEditor={() => { setEditTarget(null); setEditorOpen(true); }}
           onOpenLeaders={() => setLeadersOpen(true)}
@@ -95,10 +101,8 @@ const Index = () => {
       {leadersOpen && <Leaderboard username={user.name} onClose={() => setLeadersOpen(false)} />}
       {clansOpen && (
         <ClansScreen
-          username={user.name}
           myClan={myClan}
-          onJoin={(c) => setMyClan(c)}
-          onLeave={() => setMyClan(null)}
+          onClanChange={setMyClan}
           onClose={() => setClansOpen(false)}
         />
       )}

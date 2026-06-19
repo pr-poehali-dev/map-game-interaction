@@ -1,0 +1,17 @@
+{
+  "tests": [
+    {
+      "name": "OPTIONS preflight",
+      "method": "OPTIONS",
+      "path": "/",
+      "expectedStatus": 200
+    },
+    {
+      "name": "Sync without token unauthorized",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "sync", "x": 5, "y": 5},
+      "expectedStatus": 401
+    }
+  ]
+}
