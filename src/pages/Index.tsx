@@ -1,16 +1,40 @@
 import { useState } from 'react';
 import Icon from '@/components/ui/icon';
 import AuthScreen from '@/components/game/AuthScreen';
-import GameScreen from '@/components/game/GameScreen';
+import GameScreen, { Privat } from '@/components/game/GameScreen';
 import PixelEditor from '@/components/game/PixelEditor';
 import Leaderboard from '@/components/game/Leaderboard';
-import { SpriteData } from '@/components/game/sprites';
+import ClansScreen, { Clan } from '@/components/game/ClansScreen';
+import { SpriteData, GameItem } from '@/components/game/sprites';
 
 const Index = () => {
   const [user, setUser] = useState<{ name: string; char: number } | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [leadersOpen, setLeadersOpen] = useState(false);
-  const [customItem, setCustomItem] = useState<SpriteData | null>(null);
+  const [clansOpen, setClansOpen] = useState(false);
+
+  const [newItem, setNewItem] = useState<GameItem | null>(null);
+  const [privats, setPrivats] = useState<Privat[]>([]);
+  const [myClan, setMyClan] = useState<Clan | null>(null);
+
+  // редактирование существующего предмета: callback применяет новый спрайт
+  const [editTarget, setEditTarget] = useState<{ item: GameItem; apply: (s: SpriteData) => void } | null>(null);
+
+  const openEditItem = (item: GameItem, apply: (s: SpriteData) => void) => {
+    setEditTarget({ item, apply });
+    setEditorOpen(true);
+  };
+
+  const handleSave = (sprite: SpriteData) => {
+    if (editTarget) {
+      editTarget.apply(sprite);
+      setEditTarget(null);
+    } else if (user) {
+      // новый предмет передаём в игру (попадёт в инвентарь)
+      setNewItem({ id: Date.now(), sprite, creator: user.name, editors: [], solid: false });
+    }
+    setEditorOpen(false);
+  };
 
   if (!user) {
     return (
@@ -22,7 +46,6 @@ const Index = () => {
 
   return (
     <div className="crt min-h-screen flex flex-col">
-      {/* HEADER */}
       <header className="border-b-2 border-border bg-card/60 backdrop-blur-sm">
         <div className="max-w-[1200px] mx-auto px-4 py-3 flex items-center justify-between">
           <h1 className="font-pixel text-[11px] text-primary neon-glow flex items-center gap-2">
@@ -46,27 +69,39 @@ const Index = () => {
         </div>
       </header>
 
-      {/* GAME */}
       <main className="flex-1 px-4 py-5 w-full">
         <GameScreen
           username={user.name}
           charIndex={user.char}
-          customItem={customItem}
-          onOpenEditor={() => setEditorOpen(true)}
+          newItem={newItem}
+          onConsumeNewItem={() => setNewItem(null)}
+          privats={privats}
+          setPrivats={setPrivats}
+          myClan={myClan}
+          onOpenEditor={() => { setEditTarget(null); setEditorOpen(true); }}
           onOpenLeaders={() => setLeadersOpen(true)}
+          onOpenClans={() => setClansOpen(true)}
+          onEditItem={openEditItem}
         />
       </main>
 
       {editorOpen && (
         <PixelEditor
-          onClose={() => setEditorOpen(false)}
-          onSave={(s) => {
-            setCustomItem(s);
-            setEditorOpen(false);
-          }}
+          initial={editTarget?.item.sprite}
+          onClose={() => { setEditorOpen(false); setEditTarget(null); }}
+          onSave={handleSave}
         />
       )}
       {leadersOpen && <Leaderboard username={user.name} onClose={() => setLeadersOpen(false)} />}
+      {clansOpen && (
+        <ClansScreen
+          username={user.name}
+          myClan={myClan}
+          onJoin={(c) => setMyClan(c)}
+          onLeave={() => setMyClan(null)}
+          onClose={() => setClansOpen(false)}
+        />
+      )}
     </div>
   );
 };

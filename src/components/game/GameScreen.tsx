@@ -1,14 +1,13 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import Icon from '@/components/ui/icon';
 import PixelSprite from './PixelSprite';
-import { CHARACTERS, ITEMS, SpriteData } from './sprites';
+import { CHARACTERS, ITEMS, SpriteData, GameItem } from './sprites';
+import { isFrame, sectorOf, hash2 } from './world';
+import { Clan } from './ClansScreen';
 
-interface FloorItem {
-  id: number;
+interface FloorItem extends GameItem {
   x: number;
   y: number;
-  sprite: SpriteData;
-  owner: string;
 }
 
 interface Player {
@@ -27,85 +26,196 @@ interface ChatMsg {
   color: string;
 }
 
-const GRID_W = 14;
-const GRID_H = 9;
+export interface Privat {
+  col: number;
+  row: number;
+  owner: string;
+  clanTag: string;
+  clanName: string;
+  color: string;
+  until: number;
+}
 
-const GameScreen = ({ username, charIndex, customItem, onOpenEditor, onOpenLeaders }: {
+const VIEW_W = 13;
+const VIEW_H = 9;
+const DAY = 86400000;
+
+const seedItem = (sprite: SpriteData, creator: string, editors: string[] = []): GameItem => ({
+  id: Math.random(),
+  sprite,
+  creator,
+  editors,
+  solid: false,
+});
+
+const GameScreen = ({
+  username, charIndex, newItem, onConsumeNewItem, privats, setPrivats,
+  myClan, onOpenEditor, onOpenLeaders, onOpenClans, onEditItem,
+}: {
   username: string;
   charIndex: number;
-  customItem: SpriteData | null;
+  newItem: GameItem | null;
+  onConsumeNewItem: () => void;
+  privats: Privat[];
+  setPrivats: React.Dispatch<React.SetStateAction<Privat[]>>;
+  myClan: Clan | null;
   onOpenEditor: () => void;
   onOpenLeaders: () => void;
+  onOpenClans: () => void;
+  onEditItem: (item: GameItem, apply: (s: SpriteData) => void) => void;
 }) => {
-  const [players, setPlayers] = useState<Player[]>([
-    { id: 1, name: username, x: 6, y: 4, char: charIndex, me: true },
-    { id: 2, name: 'NEO_42', x: 2, y: 2, char: 1 },
-    { id: 3, name: 'pixelKa', x: 10, y: 6, char: 2 },
-    { id: 4, name: 'retr0', x: 11, y: 1, char: 3 },
+  const [pos, setPos] = useState({ x: 5, y: 5 });
+  const [others] = useState<Player[]>([
+    { id: 2, name: 'NEO_42', x: 3, y: 4, char: 1 },
+    { id: 3, name: 'pixelKa', x: 8, y: 7, char: 2 },
   ]);
 
   const [floor, setFloor] = useState<FloorItem[]>([
-    { id: 101, x: 4, y: 5, sprite: ITEMS[0], owner: 'NEO_42' },
-    { id: 102, x: 8, y: 3, sprite: ITEMS[1], owner: 'pixelKa' },
-    { id: 103, x: 3, y: 7, sprite: ITEMS[2], owner: 'retr0' },
+    { ...seedItem(ITEMS[0], 'NEO_42', ['gh0st']), x: 4, y: 5 },
+    { ...seedItem(ITEMS[1], 'pixelKa'), x: 8, y: 6 },
+    { ...seedItem(ITEMS[2], 'retr0', ['pixelKa', 'NEO_42']), x: 6, y: 8 },
   ]);
 
-  const [hand, setHand] = useState<SpriteData | null>(customItem);
+  // инвентарь 10 слотов
+  const [inv, setInv] = useState<(GameItem | null)[]>(() => {
+    const a: (GameItem | null)[] = Array(10).fill(null);
+    return a;
+  });
+  const [slot, setSlot] = useState(0);
+
   const [messages, setMessages] = useState<ChatMsg[]>([
-    { id: 1, name: 'NEO_42', text: 'кто кинул сундук возле фонтана?', color: 'text-secondary' },
-    { id: 2, name: 'pixelKa', text: 'я зелье оставила, забирайте', color: 'text-primary' },
-    { id: 3, name: 'retr0', text: 'го фарм предметов на лидерборд', color: 'text-accent' },
+    { id: 1, name: 'NEO_42', text: 'кто приватил сектор у спавна?', color: 'text-secondary' },
+    { id: 2, name: 'pixelKa', text: 'го клан, приватим больше секторов', color: 'text-primary' },
   ]);
   const [chatInput, setChatInput] = useState('');
   const chatRef = useRef<HTMLDivElement>(null);
+  const [hover, setHover] = useState<FloorItem | null>(null);
 
-  const me = players.find((p) => p.me)!;
-
+  // новый созданный предмет кладём в текущий слот (или первый свободный)
   useEffect(() => {
-    setHand(customItem);
-  }, [customItem]);
+    if (!newItem) return;
+    setInv((prev) => {
+      const n = [...prev];
+      if (n[slot]) {
+        const free = n.findIndex((x) => !x);
+        if (free >= 0) { n[free] = newItem; setSlot(free); }
+        else n[slot] = newItem;
+      } else {
+        n[slot] = newItem;
+      }
+      return n;
+    });
+    onConsumeNewItem();
+    /* eslint-disable-next-line */
+  }, [newItem]);
 
   useEffect(() => {
     chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages]);
 
-  const move = (dx: number, dy: number) => {
-    setPlayers((prev) =>
-      prev.map((p) =>
-        p.me
-          ? {
-              ...p,
-              x: Math.max(0, Math.min(GRID_W - 1, p.x + dx)),
-              y: Math.max(0, Math.min(GRID_H - 1, p.y + dy)),
-            }
-          : p,
-      ),
-    );
+  const setSlotItem = (i: GameItem | null) => {
+    setInv((prev) => { const n = [...prev]; n[slot] = i; return n; });
   };
+
+  const move = (dx: number, dy: number) =>
+    setPos((p) => {
+      const nx = p.x + dx;
+      const ny = p.y + dy;
+      const blocked = floor.some((f) => f.x === nx && f.y === ny && f.solid);
+      return blocked ? p : { x: nx, y: ny };
+    });
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase();
       if (['arrowup', 'w', 'ц'].includes(k)) { e.preventDefault(); move(0, -1); }
-      if (['arrowdown', 's', 'ы'].includes(k)) { e.preventDefault(); move(0, 1); }
-      if (['arrowleft', 'a', 'ф'].includes(k)) { e.preventDefault(); move(-1, 0); }
-      if (['arrowright', 'd', 'в'].includes(k)) { e.preventDefault(); move(1, 0); }
+      else if (['arrowdown', 's', 'ы'].includes(k)) { e.preventDefault(); move(0, 1); }
+      else if (['arrowleft', 'a', 'ф'].includes(k)) { e.preventDefault(); move(-1, 0); }
+      else if (['arrowright', 'd', 'в'].includes(k)) { e.preventDefault(); move(1, 0); }
+      else if (/^[0-9]$/.test(k)) { setSlot(k === '0' ? 9 : parseInt(k) - 1); }
+      else if (k === 'e' || k === 'у') { e.preventDefault(); pickOrDrop(); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+    /* eslint-disable-next-line */
+  }, [pos, inv, slot, privats, floor]);
+
+  // активный приват клетки игрока
+  const curSector = sectorOf(pos.x, pos.y);
+  const curPrivat = useMemo(() => {
+    if (!curSector) return null;
+    return privats.find((p) => p.col === curSector.col && p.row === curSector.row && p.until > Date.now()) || null;
+  }, [curSector, privats]);
+
+  const canBuildHere = () => {
+    if (isFrame(pos.x, pos.y)) return false; // в рамке нельзя ставить
+    if (curPrivat) {
+      // в привате строит только владелец/соклановец
+      if (myClan && myClan.tag === curPrivat.clanTag) return true;
+      return curPrivat.owner === username && !curPrivat.clanTag;
+    }
+    return true;
+  };
 
   const pickOrDrop = () => {
-    if (hand) {
-      setFloor((prev) => [...prev, { id: Date.now(), x: me.x, y: me.y, sprite: hand, owner: username }]);
-      setHand(null);
-    } else {
-      const under = floor.find((f) => f.x === me.x && f.y === me.y);
-      if (under) {
-        setHand(under.sprite);
-        setFloor((prev) => prev.filter((f) => f.id !== under.id));
-      }
+    const hereItem = floor.find((f) => f.x === pos.x && f.y === pos.y);
+    const cur = inv[slot];
+    if (cur) {
+      if (!canBuildHere()) return;
+      if (hereItem) return; // клетка занята
+      setFloor((prev) => [...prev, { ...cur, x: pos.x, y: pos.y }]);
+      setSlotItem(null);
+    } else if (hereItem) {
+      // нельзя забрать чужое из привата
+      if (curPrivat && !(myClan && myClan.tag === curPrivat.clanTag) && curPrivat.owner !== username) return;
+      setSlotItem({ id: hereItem.id, sprite: hereItem.sprite, creator: hereItem.creator, editors: hereItem.editors, solid: hereItem.solid });
+      setFloor((prev) => prev.filter((f) => f.id !== hereItem.id));
     }
+  };
+
+  const toggleSolid = (id: number) =>
+    setFloor((prev) => prev.map((f) => (f.id === id ? { ...f, solid: !f.solid } : f)));
+
+  const editFloorItem = (item: FloorItem) => {
+    onEditItem(
+      { id: item.id, sprite: item.sprite, creator: item.creator, editors: item.editors, solid: item.solid },
+      (s) =>
+        setFloor((prev) =>
+          prev.map((f) =>
+            f.id === item.id
+              ? { ...f, sprite: s, editors: f.editors.includes(username) || f.creator === username ? f.editors : [...f.editors, username] }
+              : f,
+          ),
+        ),
+    );
+  };
+
+  const privatizeCurrent = () => {
+    if (!curSector || curPrivat) return;
+    const until = Date.now() + 3 * DAY;
+    setPrivats((prev) => [
+      ...prev,
+      {
+        col: curSector.col,
+        row: curSector.row,
+        owner: username,
+        clanTag: myClan?.tag || '',
+        clanName: myClan?.name || '',
+        color: myClan?.color || '#2bdc87',
+        until,
+      },
+    ]);
+  };
+
+  const extendCurrent = () => {
+    if (!curPrivat) return;
+    const canExtend = curPrivat.owner === username || (myClan && myClan.tag === curPrivat.clanTag);
+    if (!canExtend) return;
+    setPrivats((prev) =>
+      prev.map((p) =>
+        p.col === curPrivat.col && p.row === curPrivat.row ? { ...p, until: Date.now() + 3 * DAY } : p,
+      ),
+    );
   };
 
   const sendMsg = () => {
@@ -114,117 +224,245 @@ const GameScreen = ({ username, charIndex, customItem, onOpenEditor, onOpenLeade
     setChatInput('');
   };
 
-  const cell = 'min(6.5vw, 52px)';
+  const cell = 'min(7vw, 54px)';
+
+  // окно мира вокруг игрока (камера)
+  const ox = pos.x - Math.floor(VIEW_W / 2);
+  const oy = pos.y - Math.floor(VIEW_H / 2);
+
+  const tiles = [];
+  for (let vy = 0; vy < VIEW_H; vy++) {
+    for (let vx = 0; vx < VIEW_W; vx++) {
+      const wx = ox + vx;
+      const wy = oy + vy;
+      tiles.push({ vx, vy, wx, wy, frame: isFrame(wx, wy) });
+    }
+  }
+
+  const privatAt = (wx: number, wy: number) => {
+    const s = sectorOf(wx, wy);
+    if (!s) return null;
+    return privats.find((p) => p.col === s.col && p.row === s.row && p.until > Date.now()) || null;
+  };
+
+  const daysLeft = curPrivat ? Math.max(0, Math.ceil((curPrivat.until - Date.now()) / DAY)) : 0;
 
   return (
     <div className="grid lg:grid-cols-[1fr_320px] gap-4 max-w-[1200px] mx-auto w-full">
       {/* ИГРОВАЯ ЗОНА */}
       <div className="flex flex-col gap-3 animate-fade-in">
         <div className="flex items-center justify-between flex-wrap gap-2">
-          <h2 className="font-pixel text-primary text-xs neon-glow">СЕРВЕР · ПЛОЩАДЬ</h2>
+          <h2 className="font-pixel text-primary text-xs neon-glow flex items-center gap-2">
+            <Icon name="Compass" size={16} /> X:{pos.x} Y:{pos.y}
+          </h2>
           <div className="flex items-center gap-2 font-mono text-lg text-muted-foreground">
-            <Icon name="Users" size={18} className="text-primary" />
-            {players.length} онлайн
+            <Icon name="Map" size={18} className="text-primary" />
+            {curSector ? `сектор ${curSector.col}:${curSector.row}` : 'проход (рамка)'}
           </div>
         </div>
 
+        {/* баннер привата */}
+        {curPrivat && (
+          <div
+            className="font-pixel text-[10px] px-3 py-2 border-2 animate-fade-in flex items-center gap-2"
+            style={{ borderColor: curPrivat.color, color: curPrivat.color, background: 'hsl(var(--card))' }}
+          >
+            <Icon name="ShieldCheck" size={14} />
+            ПРИВАТ {curPrivat.clanTag ? `[${curPrivat.clanTag}] ${curPrivat.clanName}` : curPrivat.owner} · ещё {daysLeft} дн.
+          </div>
+        )}
+
         {/* КАРТА */}
         <div
-          className="relative grid-floor bg-card border-2 border-border pixel-shadow overflow-hidden mx-auto"
-          style={{
-            width: `calc(${cell} * ${GRID_W})`,
-            height: `calc(${cell} * ${GRID_H})`,
-            backgroundSize: `${cell} ${cell}`,
-          }}
+          className="relative bg-card border-2 border-border pixel-shadow overflow-hidden mx-auto"
+          style={{ width: `calc(${cell} * ${VIEW_W})`, height: `calc(${cell} * ${VIEW_H})` }}
+          onMouseLeave={() => setHover(null)}
         >
-          {/* предметы на полу */}
-          {floor.map((f) => (
-            <div
-              key={f.id}
-              className="absolute flex items-center justify-center"
-              style={{ left: `calc(${cell} * ${f.x})`, top: `calc(${cell} * ${f.y})`, width: cell, height: cell }}
-              title={`предмет от ${f.owner}`}
-            >
-              <PixelSprite grid={f.sprite.grid} palette={f.sprite.palette} size={4} className="opacity-90" />
-            </div>
-          ))}
-
-          {/* игроки */}
-          {players.map((p) => (
-            <div
-              key={p.id}
-              className="absolute flex flex-col items-center justify-center transition-all duration-150 ease-out"
-              style={{ left: `calc(${cell} * ${p.x})`, top: `calc(${cell} * ${p.y})`, width: cell, height: cell, zIndex: p.me ? 20 : 10 }}
-            >
-              <span className={`absolute -top-1 font-mono text-[11px] leading-none px-1 whitespace-nowrap ${p.me ? 'text-primary' : 'text-muted-foreground'}`}>
-                {p.name}
-              </span>
-              <div className={p.me ? 'animate-float-bob drop-shadow-[0_0_6px_rgba(43,220,135,0.8)]' : ''}>
-                <PixelSprite grid={CHARACTERS[p.char].grid} palette={CHARACTERS[p.char].palette} size={5} />
+          {/* плитки мира */}
+          {tiles.map((t) => {
+            const pr = !t.frame ? privatAt(t.wx, t.wy) : null;
+            const decor = !t.frame && hash2(t.wx, t.wy) > 0.88;
+            return (
+              <div
+                key={`${t.vx}-${t.vy}`}
+                className="absolute"
+                style={{
+                  left: `calc(${cell} * ${t.vx})`,
+                  top: `calc(${cell} * ${t.vy})`,
+                  width: cell,
+                  height: cell,
+                  background: t.frame
+                    ? 'repeating-linear-gradient(45deg, hsl(var(--muted)) 0 6px, hsl(var(--background)) 6px 12px)'
+                    : pr
+                    ? `${pr.color}14`
+                    : 'transparent',
+                  boxShadow: pr ? `inset 0 0 0 1px ${pr.color}55` : 'inset 0 0 0 1px hsl(var(--border) / 0.25)',
+                }}
+              >
+                {decor && <div className="w-1.5 h-1.5 bg-muted-foreground/30 m-1" />}
               </div>
-            </div>
-          ))}
+            );
+          })}
 
-          {/* подсветка моей клетки */}
+          {/* предметы на полу */}
+          {floor.map((f) => {
+            const vx = f.x - ox;
+            const vy = f.y - oy;
+            if (vx < 0 || vy < 0 || vx >= VIEW_W || vy >= VIEW_H) return null;
+            return (
+              <div
+                key={f.id}
+                className="absolute flex items-center justify-center cursor-pointer"
+                style={{ left: `calc(${cell} * ${vx})`, top: `calc(${cell} * ${vy})`, width: cell, height: cell }}
+                onMouseEnter={() => setHover(f)}
+              >
+                <PixelSprite grid={f.sprite.grid} palette={f.sprite.palette} size={1.4} className={f.solid ? 'ring-1 ring-destructive/60' : 'opacity-95'} />
+              </div>
+            );
+          })}
+
+          {/* другие игроки (мировые координаты) */}
+          {others.map((p) => {
+            const vx = p.x - ox;
+            const vy = p.y - oy;
+            if (vx < 0 || vy < 0 || vx >= VIEW_W || vy >= VIEW_H) return null;
+            return (
+              <div
+                key={p.id}
+                className="absolute flex flex-col items-center justify-center"
+                style={{ left: `calc(${cell} * ${vx})`, top: `calc(${cell} * ${vy})`, width: cell, height: cell, zIndex: 10 }}
+              >
+                <span className="absolute -top-1 font-mono text-[11px] leading-none text-muted-foreground whitespace-nowrap">{p.name}</span>
+                <PixelSprite grid={CHARACTERS[p.char].grid} palette={CHARACTERS[p.char].palette} size={4} />
+              </div>
+            );
+          })}
+
+          {/* мой персонаж (центр) */}
           <div
-            className="absolute border-2 border-primary/60 pointer-events-none animate-flicker"
-            style={{ left: `calc(${cell} * ${me.x})`, top: `calc(${cell} * ${me.y})`, width: cell, height: cell }}
-          />
+            className="absolute flex flex-col items-center justify-center"
+            style={{
+              left: `calc(${cell} * ${Math.floor(VIEW_W / 2)})`,
+              top: `calc(${cell} * ${Math.floor(VIEW_H / 2)})`,
+              width: cell,
+              height: cell,
+              zIndex: 20,
+            }}
+          >
+            <span className="absolute -top-1 font-mono text-[11px] leading-none text-primary whitespace-nowrap">{username}</span>
+            <div className="animate-float-bob drop-shadow-[0_0_6px_rgba(43,220,135,0.8)]">
+              <PixelSprite grid={CHARACTERS[charIndex].grid} palette={CHARACTERS[charIndex].palette} size={4.4} />
+            </div>
+          </div>
+
+          {/* подсказка по предмету */}
+          {hover && (
+            <div className="absolute bottom-1 left-1 right-1 bg-background/95 border-2 border-primary p-2 z-30 animate-fade-in">
+              <p className="font-mono text-base text-primary">Создатель: <span className="text-foreground">{hover.creator}</span></p>
+              <p className="font-mono text-sm text-muted-foreground">
+                Меняли: {hover.editors.length ? hover.editors.join(', ') : '—'}
+              </p>
+              <p className="font-mono text-sm text-muted-foreground flex items-center gap-1">
+                <Icon name={hover.solid ? 'Ban' : 'Footprints'} size={12} />
+                {hover.solid ? 'непроходимый' : 'проходимый'}
+              </p>
+              {curPrivat && (myClan?.tag === curPrivat.clanTag || curPrivat.owner === username) && (
+                <div className="flex gap-2 mt-1">
+                  <button onClick={() => toggleSolid(hover.id)} className="font-mono text-sm border border-border px-2 py-0.5 hover:border-primary">
+                    {hover.solid ? 'сделать проходимым' : 'непроходимым'}
+                  </button>
+                  <button onClick={() => editFloorItem(hover)} className="font-mono text-sm border border-border px-2 py-0.5 hover:border-accent">
+                    редактировать
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* УПРАВЛЕНИЕ */}
-        <div className="flex items-center justify-between flex-wrap gap-3 mt-1">
-          {/* D-pad */}
+        <div className="flex items-start justify-between flex-wrap gap-3 mt-1">
           <div className="grid grid-cols-3 gap-1 w-[132px] select-none">
             <span />
             <DPad onClick={() => move(0, -1)} icon="ChevronUp" />
             <span />
             <DPad onClick={() => move(-1, 0)} icon="ChevronLeft" />
-            <DPad onClick={pickOrDrop} icon={hand ? 'Hand' : 'Grab'} active />
+            <DPad onClick={pickOrDrop} icon={inv[slot] ? 'Hand' : 'Grab'} active />
             <DPad onClick={() => move(1, 0)} icon="ChevronRight" />
             <span />
             <DPad onClick={() => move(0, 1)} icon="ChevronDown" />
             <span />
           </div>
 
-          {/* рука / инвентарь */}
-          <div className="flex items-center gap-3">
-            <div className="flex flex-col items-center gap-1">
-              <span className="font-mono text-base text-muted-foreground">В РУКЕ</span>
-              <div className="w-14 h-14 border-2 border-dashed border-border bg-background flex items-center justify-center pixel-shadow">
-                {hand ? (
-                  <PixelSprite grid={hand.grid} palette={hand.palette} size={5} className="animate-scale-in" />
+          {/* приват сектора */}
+          <div className="flex flex-col gap-2 flex-1 min-w-[160px]">
+            {curSector ? (
+              curPrivat ? (
+                (curPrivat.owner === username || myClan?.tag === curPrivat.clanTag) ? (
+                  <button onClick={extendCurrent} className="font-pixel text-[9px] bg-secondary text-secondary-foreground py-3 pixel-shadow active:translate-y-[2px] active:shadow-none">
+                    ПРОДЛИТЬ ПРИВАТ (+3 ДНЯ)
+                  </button>
                 ) : (
-                  <Icon name="Hand" size={20} className="text-muted-foreground/50" />
-                )}
-              </div>
-            </div>
+                  <p className="font-mono text-base text-muted-foreground text-center">сектор занят</p>
+                )
+              ) : (
+                <button onClick={privatizeCurrent} className="font-pixel text-[9px] bg-accent text-accent-foreground py-3 pixel-shadow active:translate-y-[2px] active:shadow-none">
+                  ПРИВАТИЗИРОВАТЬ (3 ДНЯ)
+                </button>
+              )
+            ) : (
+              <p className="font-mono text-base text-muted-foreground text-center">в рамке нельзя строить</p>
+            )}
             <button
               onClick={pickOrDrop}
-              className="font-pixel text-[10px] bg-primary text-primary-foreground px-4 py-3 pixel-shadow hover:translate-y-[2px] hover:shadow-none transition-all"
+              className="font-pixel text-[9px] bg-primary text-primary-foreground py-3 pixel-shadow active:translate-y-[2px] active:shadow-none"
             >
-              {hand ? 'ПОЛОЖИТЬ' : 'ВЗЯТЬ'}
+              {inv[slot] ? 'ПОЛОЖИТЬ' : 'ВЗЯТЬ'}
             </button>
           </div>
         </div>
+
+        {/* ИНВЕНТАРЬ 10 слотов */}
+        <div className="flex gap-1.5 justify-center flex-wrap">
+          {inv.map((it, i) => (
+            <button
+              key={i}
+              onClick={() => setSlot(i)}
+              className={`w-12 h-12 border-2 flex items-center justify-center relative pixel-shadow transition-all ${
+                slot === i ? 'border-primary bg-background scale-105' : 'border-border bg-card hover:border-muted-foreground'
+              }`}
+            >
+              <span className="absolute top-0 left-0.5 font-mono text-xs text-muted-foreground">{i === 9 ? 0 : i + 1}</span>
+              {it && <PixelSprite grid={it.sprite.grid} palette={it.sprite.palette} size={1.1} />}
+            </button>
+          ))}
+        </div>
         <p className="font-mono text-base text-muted-foreground text-center">
-          WASD / стрелки — ходить · Е или кнопка — взять/положить предмет
+          WASD — ходить · 1–0 — слот · E — взять/положить · уходи далеко — мир бесконечен
         </p>
       </div>
 
       {/* БОКОВАЯ ПАНЕЛЬ */}
       <div className="flex flex-col gap-3 animate-fade-in" style={{ animationDelay: '0.1s' }}>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-3 gap-2">
           <SideBtn icon="Brush" label="СОЗДАТЬ" onClick={onOpenEditor} accent />
+          <SideBtn icon="Shield" label="КЛАНЫ" onClick={onOpenClans} />
           <SideBtn icon="Trophy" label="ТОП" onClick={onOpenLeaders} />
         </div>
 
+        {myClan && (
+          <div className="border-2 border-border bg-card px-3 py-2 font-mono text-base flex items-center justify-between">
+            <span style={{ color: myClan.color }}>[{myClan.tag}] {myClan.name}</span>
+            <span className="text-muted-foreground">{privats.filter((p) => p.clanTag === myClan.tag && p.until > Date.now()).length} секторов</span>
+          </div>
+        )}
+
         {/* ЧАТ */}
-        <div className="bg-card border-2 border-border flex flex-col flex-1 min-h-[280px] pixel-shadow">
+        <div className="bg-card border-2 border-border flex flex-col flex-1 min-h-[260px] pixel-shadow">
           <div className="font-pixel text-[10px] text-secondary px-3 py-2 border-b-2 border-border flex items-center gap-2">
             <Icon name="MessagesSquare" size={14} /> ОБЩИЙ ЧАТ
           </div>
-          <div ref={chatRef} className="flex-1 overflow-y-auto px-3 py-2 space-y-2 max-h-[320px]">
+          <div ref={chatRef} className="flex-1 overflow-y-auto px-3 py-2 space-y-2 max-h-[300px]">
             {messages.map((m) => (
               <div key={m.id} className="font-mono text-lg leading-tight animate-fade-in">
                 <span className={`${m.color} font-bold`}>{m.name}:</span>{' '}
@@ -246,7 +484,6 @@ const GameScreen = ({ username, charIndex, customItem, onOpenEditor, onOpenLeade
           </div>
         </div>
 
-        {/* поддержка */}
         <a
           href="#"
           className="font-mono text-base text-center text-muted-foreground border-2 border-border py-2 hover:border-accent hover:text-accent transition-colors flex items-center justify-center gap-2"
@@ -272,11 +509,11 @@ const DPad = ({ onClick, icon, active }: { onClick: () => void; icon: string; ac
 const SideBtn = ({ icon, label, onClick, accent }: { icon: string; label: string; onClick: () => void; accent?: boolean }) => (
   <button
     onClick={onClick}
-    className={`font-pixel text-[10px] py-3 flex flex-col items-center gap-2 pixel-shadow active:translate-y-[2px] active:shadow-none transition-all ${
+    className={`font-pixel text-[8px] py-3 flex flex-col items-center gap-2 pixel-shadow active:translate-y-[2px] active:shadow-none transition-all ${
       accent ? 'bg-accent text-accent-foreground' : 'bg-card text-foreground border-2 border-border hover:border-primary'
     }`}
   >
-    <Icon name={icon} size={20} />
+    <Icon name={icon} size={18} />
     {label}
   </button>
 );
